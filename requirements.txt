@@ -1,0 +1,7 @@
+math
+pandas_datareader
+np
+pd
+sklearn
+keras
+matplotlib
