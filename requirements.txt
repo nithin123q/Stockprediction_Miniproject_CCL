@@ -1,7 +1,6 @@
-math
 pandas_datareader
-np
-pd
+numpy
+pandas
 sklearn
 keras
 matplotlib
