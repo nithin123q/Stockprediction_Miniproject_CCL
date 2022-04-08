@@ -8,6 +8,7 @@ from sklearn.preprocessing import MinMaxScaler
 from keras.models import Sequential 
 from keras.layers import Dense, LSTM 
 import matplotlib.pyplot as plt
+import streamlit as st
 
 #To find closing price of particular day 
 def pred(symbol):
