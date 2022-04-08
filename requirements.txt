@@ -5,3 +5,4 @@ sklearn
 keras
 matplotlib
 tensorflow
+streamlit
