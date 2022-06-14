@@ -4,7 +4,7 @@ https://share.streamlit.io/nithin123q/stockprediction/main/stockprediction.py
 
 
 
-#Abstract:
+## Abstract:
 
 In Stock Market Prediction, the aim is to predict the future values of the financial stocks
 of a company. As per efficient market theory when all information related to a company
@@ -36,7 +36,7 @@ incorrectly predict the stock market trends
 
 
 
-#Conclusion:
+## Conclusion:
 
 • In this project, we tried to develop a prediction model for the stock market based on the
 technical analysis using LSTM stock market data.
