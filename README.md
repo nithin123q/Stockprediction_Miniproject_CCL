@@ -40,7 +40,7 @@ Conclusion:
 • In this project, we tried to develop a prediction model for the stock market based on the
 technical analysis using LSTM stock market data.
 
-• LSTM model are very powerful in sequence prediction problems because they are able to store
+#• LSTM model are very powerful in sequence prediction problems because they are able to store
 past information.
 
 • This could guide the future investors in the stock market to make profitable investment
