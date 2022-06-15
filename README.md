@@ -14,7 +14,7 @@ historical spot price carries the impact of all the other market events and can 
 employed to predict its future movement The recent trend in stock market prediction
 technologies is the use of machine learning which makes predictions based on the values
 of current stock market indices by training on their previous values and deploy it on
-cloud using stramlit. Streamlit is an open-source Python library that makes it easy
+cloud using streamlit. Streamlit is an open-source Python library that makes it easy
 to create and share beautiful, custom web apps for machine learning and data
 science
 learning to predict stock values . Factors considered are open, close low, high and
