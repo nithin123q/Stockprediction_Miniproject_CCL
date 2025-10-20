@@ -19,48 +19,103 @@ DEFAULT_END = TODAY
 
 # ---------- Helpers ----------
 def fetch_prices(symbol: str, start: dt.date, end: dt.date) -> pd.DataFrame:
-    # keep Close/Adj Close separate; group_by='ticker' gives MultiIndex for single/mtl tickers
-    df = yf.download(
+    """
+    Get raw OHLCV from yfinance. We keep group_by='ticker' so yfinance may return a MultiIndex.
+    """
+    return yf.download(
         symbol,
         start=start,
         end=end,
         progress=False,
-        auto_adjust=False,
+        auto_adjust=False,   # keep Close and Adj Close separate
         group_by="ticker",
         threads=True,
     )
-    return df
 
-def normalize_single_ticker(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+def extract_close(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
     """
-    Make sure we end up with single-level columns that include 'Close'.
-    Handles cases like ('Close','AAPL') or ('AAPL','Close').
+    Return a single-column DataFrame with column 'Close' (index = dates),
+    handling all common yfinance shapes:
+
+    1) Single-level columns with 'Close'
+    2) MultiIndex: level 0 = field ('Open','High',...,'Close'); level 1 = ticker
+    3) MultiIndex: level 0 = ticker; level 1 = field
+    4) Flattened weirdness -> look for sensible fallbacks like 'Close_AAPL', 'AAPL_Close', 'Adj Close', etc.
     """
     if df is None or df.empty:
-        return df
+        return pd.DataFrame()
 
-    # If yfinance returned a MultiIndex, slice down to this ticker
-    if isinstance(df.columns, pd.MultiIndex):
-        lvls = df.columns.names
-        # Common case from yfinance: ('Close', 'AAPL') with names ('Price', 'Ticker')
-        # If ticker appears in the LAST level:
-        if symbol in df.columns.get_level_values(-1):
-            df = df.xs(symbol, axis=1, level=-1)
-        # Else if ticker in the FIRST level:
-        elif symbol in df.columns.get_level_values(0):
-            df = df.xs(symbol, axis=1, level=0)
-        else:
-            # Flatten as a fallback
-            df.columns = ["_".join([str(x) for x in tup if x]) for tup in df.columns.to_flat_index()]
+    # Case A: already single-level with 'Close'
+    if not isinstance(df.columns, pd.MultiIndex):
+        cols = {c: c.title() for c in df.columns}
+        df = df.rename(columns=cols)
+        if "Close" in df.columns:
+            return df[["Close"]]
+        if "Adj Close" in df.columns:
+            out = df[["Adj Close"]].rename(columns={"Adj Close": "Close"})
+            return out
+        return pd.DataFrame()  # no usable close
 
-    # Normalize capitalization (e.g., 'adj close' -> 'Adj Close')
-    df = df.rename(columns={c: c.title() for c in df.columns})
+    # Case B: MultiIndex
+    # Try level 0 as field names
+    try:
+        if "Close" in df.columns.get_level_values(0):
+            sub = df.xs("Close", axis=1, level=0)  # columns are tickers (or a single series)
+            if isinstance(sub, pd.Series):
+                return sub.to_frame("Close")
+            if symbol in sub.columns:
+                return sub[[symbol]].rename(columns={symbol: "Close"})
+            # If only one column, just call it Close
+            if sub.shape[1] == 1:
+                return sub.rename(columns={sub.columns[0]: "Close"})
+    except Exception:
+        pass
 
-    # If Close missing but Adj Close present, use it
-    if "Close" not in df.columns and "Adj Close" in df.columns:
-        df["Close"] = df["Adj Close"]
+    # Try level -1 (last level) as field names
+    try:
+        if "Close" in df.columns.get_level_values(-1):
+            sub = df.xs("Close", axis=1, level=-1)  # columns are tickers
+            if isinstance(sub, pd.Series):
+                return sub.to_frame("Close")
+            if symbol in sub.columns:
+                return sub[[symbol]].rename(columns={symbol: "Close"})
+            if sub.shape[1] == 1:
+                return sub.rename(columns={sub.columns[0]: "Close"})
+    except Exception:
+        pass
 
-    return df
+    # Try the inverse: slice by ticker level if present
+    for lvl in (0, -1):
+        try:
+            if symbol in df.columns.get_level_values(lvl):
+                sub = df.xs(symbol, axis=1, level=lvl)  # columns are fields
+                # Normalize capitalization
+                sub = sub.rename(columns={c: c.title() for c in sub.columns})
+                if "Close" in sub.columns:
+                    return sub[["Close"]]
+                if "Adj Close" in sub.columns:
+                    return sub[["Adj Close"]].rename(columns={"Adj Close": "Close"})
+        except Exception:
+            pass
+
+    # Fallback: flatten and search
+    flat = df.copy()
+    flat.columns = ["_".join([str(x) for x in tup if x]) for tup in flat.columns.to_flat_index()]
+    candidates = [
+        f"Close_{symbol}",
+        f"{symbol}_Close",
+        "Close",
+        "close",
+        f"Adj Close_{symbol}",
+        f"{symbol}_Adj Close",
+        "Adj Close",
+        "adj close",
+    ]
+    for cand in candidates:
+        if cand in flat.columns:
+            return flat[[cand]].rename(columns={cand: "Close"})
+
+    return pd.DataFrame()
 
 def make_sequences(series: np.ndarray, lookback: int = 60):
     X, y = [], []
@@ -92,7 +147,6 @@ with st.sidebar:
 
 # ---------- Main ----------
 if run:
-    # Basic guards
     if not symbol:
         st.error("Please enter a stock symbol.")
         st.stop()
@@ -100,35 +154,31 @@ if run:
         st.error("Start date must be before end date.")
         st.stop()
 
-    # Download
-    df_raw = fetch_prices(symbol, start, end)
-    if df_raw is None or df_raw.empty:
+    raw = fetch_prices(symbol, start, end)
+    if raw is None or raw.empty:
         st.error("No data returned. Try widening the date range or check the symbol.")
         st.stop()
 
-    # Normalize columns → ensure 'Close'
-    df = normalize_single_ticker(df_raw.copy(), symbol)
-    if df is None or df.empty or "Close" not in df.columns:
-        st.error("Could not find a 'Close' column after normalization.")
-        st.write("Columns found:", list(df.columns))
+    close_df = extract_close(raw, symbol)
+    if close_df is None or close_df.empty or "Close" not in close_df.columns:
+        st.error("Could not locate a usable 'Close' column from the downloaded data.")
+        st.write("Raw columns snapshot:", list(raw.columns))
         st.stop()
 
-    # Show recent data & basic chart
     st.subheader("Recent Data")
-    st.dataframe(df.tail(10))
+    st.dataframe(close_df.tail(10))
 
     st.subheader("Close Price Trend")
-    # IMPORTANT: plot a Series, not a 2-D slice
-    st.line_chart(df["Close"])
+    # Always a one-column DataFrame named 'Close' → safe for Streamlit
+    st.line_chart(close_df)
 
-    # Prepare data for LSTM
-    prices = df[["Close"]].astype("float32").values
+    # Prepare data
+    prices = close_df[["Close"]].astype("float32").values
     scaler = MinMaxScaler(feature_range=(0, 1))
     scaled = scaler.fit_transform(prices)
 
-    # Split
+    # Sanity on lengths
     train_len = math.ceil(len(scaled) * 0.8)
-    # Ensure we have enough samples vs. lookback
     min_needed = max(lookback + 5, 40)
     if len(scaled) < min_needed:
         st.warning(f"Not enough data for lookback={lookback}. Add more days or reduce lookback.")
@@ -137,6 +187,7 @@ if run:
         st.warning("Range too short for this lookback. Extend dates or reduce lookback.")
         st.stop()
 
+    # Sequences
     X_train, y_train = make_sequences(scaled[:train_len], lookback)
     X_test, _ = make_sequences(scaled[train_len - lookback :], lookback)
     y_test = prices[train_len:, :]
@@ -148,12 +199,12 @@ if run:
     # Predict
     preds = scaler.inverse_transform(model.predict(X_test, verbose=0))
 
-    # Error
+    # Evaluate
     rmse = float(np.sqrt(np.mean((preds.flatten() - y_test.flatten()) ** 2)))
     st.success(f"RMSE: {rmse:,.4f}")
 
     # Plot predictions vs actual
-    valid_idx = df.index[train_len:]
+    valid_idx = close_df.index[train_len:]
     valid = pd.DataFrame({"Close": y_test.flatten(), "Predictions": preds.flatten()}, index=valid_idx)
 
     st.subheader("Predictions vs Actual")
