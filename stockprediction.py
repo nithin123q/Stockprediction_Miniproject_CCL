@@ -1,3 +1,4 @@
+# stockprediction.py
 import datetime as dt
 import math
 import numpy as np
@@ -10,33 +11,43 @@ import streamlit as st
 
 st.set_page_config(page_title="LSTM Stock Predictor", layout="wide")
 
-# ---------------------------
-# Helpers
-# ---------------------------
+# ---------- Date defaults (latest) ----------
+TODAY = dt.date.today()
+DEFAULT_START = TODAY - dt.timedelta(days=730)  # last 2 years
+DEFAULT_END = TODAY
+
+# ---------- Helpers ----------
 @st.cache_data(show_spinner=False)
 def fetch_prices(symbol: str, start: dt.date, end: dt.date) -> pd.DataFrame:
+    """
+    Fetch OHLCV data. yfinance can return MultiIndex columns when multiple tickers,
+    so we normalize below.
+    """
     df = yf.download(symbol, start=start, end=end, progress=False, auto_adjust=False)
     return df
 
 def normalize_ohlc(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
-    """Ensure a plain 'Close' column even if yfinance returns MultiIndex."""
-    if df.empty:
+    """
+    Ensure single-level columns and guarantee a plain 'Close' column.
+    """
+    if df is None or df.empty:
         return df
 
     # If MultiIndex columns like ('Close','AAPL'), reduce to single level
     if isinstance(df.columns, pd.MultiIndex):
         try:
-            # slice by ticker if present
-            df = df.xs(symbol, axis=1, level=-1)
+            if symbol in df.columns.get_level_values(-1):
+                df = df.xs(symbol, axis=1, level=-1)
+            else:
+                df.columns = ["_".join([str(x) for x in tup if x]) for tup in df.columns.to_flat_index()]
         except Exception:
-            # flatten as fallback
             df.columns = ["_".join([str(x) for x in tup if x]) for tup in df.columns.to_flat_index()]
 
-    # Normalize case (close -> Close)
+    # Normalize casing (e.g., 'close' -> 'Close')
     rename_map = {c: c.title() for c in df.columns}
     df = df.rename(columns=rename_map)
 
-    # If no 'Close' but have 'Adj Close', create a Close column
+    # If only Adj Close is present, create a Close alias
     if "Close" not in df.columns and "Adj Close" in df.columns:
         df["Close"] = df["Adj Close"]
 
@@ -60,34 +71,31 @@ def build_model(timesteps: int):
     model.compile(optimizer="adam", loss="mean_squared_error")
     return model
 
-# ---------------------------
-# UI
-# ---------------------------
+# ---------- UI ----------
 st.title("📈 LSTM Stock Predictor")
 
 c1, c2, c3 = st.columns(3)
 with c1:
     symbol = st.text_input("Stock Symbol", "AAPL").upper().strip()
 with c2:
-    start = st.date_input("Start Date", dt.date(2020, 3, 4))
+    start = st.date_input("Start Date", DEFAULT_START)
 with c3:
-    end = st.date_input("End Date", dt.date(2021, 5, 6))
+    end = st.date_input("End Date", DEFAULT_END)
 
 c4, c5, c6 = st.columns(3)
 with c4:
-    lookback = st.number_input("Lookback window (days)", min_value=30, max_value=120, value=60, step=5)
+    lookback = st.number_input("Lookback (days)", 30, 120, 60, step=5)
 with c5:
-    epochs = st.number_input("Epochs", min_value=1, max_value=20, value=1, step=1)
+    epochs = st.number_input("Epochs", 1, 20, 1)
 with c6:
-    batch_size = st.number_input("Batch size", min_value=1, max_value=64, value=1, step=1)
+    batch_size = st.number_input("Batch size", 1, 64, 1)
 
-run = st.button("Train & Predict")
-
-# ---------------------------
-# Action
-# ---------------------------
-if run:
+if st.button("Train & Predict"):
     try:
+        if start >= end:
+            st.error("Start date must be before end date.")
+            st.stop()
+
         with st.spinner("Downloading data…"):
             df_raw = fetch_prices(symbol, start, end)
 
@@ -95,6 +103,7 @@ if run:
             st.error("No data returned. Check symbol and date range.")
             st.stop()
 
+        # Normalize columns to guarantee a plain 'Close'
         df = normalize_ohlc(df_raw.copy(), symbol)
         if "Close" not in df.columns:
             st.error("Downloaded data does not contain a 'Close' column after normalization.")
@@ -105,8 +114,7 @@ if run:
         st.dataframe(df.tail(10))
 
         st.subheader("Close Price")
-        # Use a safe selector (Series works fine)
-        st.line_chart(df["Close"])
+        st.line_chart(df["Close"])  # plot Series (safe)
 
         # Prepare data
         data = df[["Close"]].copy()
@@ -118,7 +126,7 @@ if run:
         # 80/20 split
         train_len = math.ceil(len(scaled) * 0.8)
         if train_len <= lookback or len(scaled) - train_len < max(5, lookback):
-            st.warning("Selected date range is too short for the chosen lookback. Extend the range or reduce lookback.")
+            st.warning("Date range is too short for the chosen lookback. Extend the range or reduce lookback.")
             st.stop()
 
         train_data = scaled[:train_len]
@@ -128,19 +136,16 @@ if run:
         x_test, _ = make_sequences(test_data, lookback)
         y_test = values[train_len:, :]  # unscaled for metrics/plot
 
-        # Train
         with st.spinner("Training model…"):
             model = build_model(lookback)
             model.fit(x_train, y_train, epochs=epochs, batch_size=batch_size, verbose=0)
 
-        # Predict
         preds = scaler.inverse_transform(model.predict(x_test, verbose=0))
 
-        # Metrics
+        # Correct RMSE
         rmse = float(np.sqrt(np.mean((preds.flatten() - y_test.flatten()) ** 2)))
         st.success(f"RMSE: {rmse:,.4f}")
 
-        # Plot train/valid/pred
         train = data.iloc[:train_len].copy()
         valid = data.iloc[train_len:].copy()
         valid["Predictions"] = preds
