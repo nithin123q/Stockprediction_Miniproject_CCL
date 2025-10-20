@@ -1,3 +1,4 @@
+# stockprediction.py
 import datetime as dt
 import math
 import numpy as np
@@ -10,10 +11,8 @@ import streamlit as st
 
 st.set_page_config(page_title="LSTM Stock Predictor", layout="wide")
 
-# --- Helpers ---
 def load_prices(symbol: str, start: dt.date, end: dt.date) -> pd.DataFrame:
-    df = yf.download(symbol, start=start, end=end, progress=False)
-    return df
+    return yf.download(symbol, start=start, end=end, progress=False)
 
 def make_sequences(series: np.ndarray, lookback: int = 60):
     x, y = [], []
@@ -30,18 +29,17 @@ def build_model(timesteps: int):
     model.add(LSTM(50, return_sequences=False))
     model.add(Dense(25))
     model.add(Dense(1))
-    model.compile(optimizer="adam", loss="mean_squared_error")
+    model.compile(optimizer='adam', loss='mean_squared_error')
     return model
 
-# --- Sidebar ---
+# Sidebar controls
 st.title("📈 LSTM Stock Predictor")
 symbol = st.sidebar.text_input("Enter Stock Symbol:", value="AAPL")
-start = st.sidebar.date_input("Enter Start Date:", dt.date(2020, 3, 4))
-end = st.sidebar.date_input("Enter End Date:", dt.date(2021, 5, 6))
+start  = st.sidebar.date_input("Enter Start Date:", dt.date(2020, 3, 4))
+end    = st.sidebar.date_input("Enter End Date:",   dt.date(2021, 5, 6))
 lookback = st.sidebar.number_input("Lookback window", 30, 120, 60, step=5)
-epochs = st.sidebar.number_input("Epochs", 1, 20, 1)
+epochs   = st.sidebar.number_input("Epochs", 1, 20, 1)
 
-# --- UI Actions ---
 if st.button("Train & Predict"):
     with st.spinner("Downloading data and training model…"):
         df = load_prices(symbol, start, end)
@@ -60,28 +58,24 @@ if st.button("Train & Predict"):
         scaler = MinMaxScaler(feature_range=(0, 1))
         scaled = scaler.fit_transform(values)
 
-        # Split (80/20)
+        # 80/20 split
         train_len = math.ceil(len(scaled) * 0.8)
         train_data = scaled[:train_len]
-        test_data = scaled[train_len - lookback:]  # overlap
+        test_data  = scaled[train_len - lookback:]  # include overlap
 
-        # Sequences
         x_train, y_train = make_sequences(train_data, lookback)
         x_test, _ = make_sequences(test_data, lookback)
-        y_test = values[train_len:, :]  # unscaled
+        y_test = values[train_len:, :]  # unscaled for metrics/plot
 
-        # Model
         model = build_model(lookback)
         model.fit(x_train, y_train, epochs=epochs, batch_size=1, verbose=0)
 
-        # Predict & invert
         preds = scaler.inverse_transform(model.predict(x_test))
 
-        # RMSE (fixed)
+        # ✅ fixed RMSE
         rmse = np.sqrt(np.mean((preds.flatten() - y_test.flatten())**2))
         st.info(f"RMSE: {rmse:,.4f}")
 
-        # Plot
         train = data.iloc[:train_len].copy()
         valid = data.iloc[train_len:].copy()
         valid["Predictions"] = preds
